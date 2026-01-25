@@ -3,144 +3,132 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+
 use App\Models\EnrollmentDetail; 
 use App\Models\Enrollment;       
 use App\Models\Student;
 use App\Models\Course;
 use App\Models\Department;
-use Exception;
 
 class EnrollmentController extends Controller
 {
+    //
     public function index(Request $request)
     {
-        try {
-            // เริ่มต้น Query จาก View
-            $query = EnrollmentDetail::query();
+        // เริ่มต้น Query จาก View
+        $query = EnrollmentDetail::query();
 
-            // 2. ถ้ามีการส่งค่า 'search' มา
-            if ($request->has('search') && $request->search != '') {
-                $search = $request->search;
+        // 2. ถ้ามีการส่งค่า 'search' มา
+        if ($request->has('search') && $request->search != '') {
+            $search = $request->search;
 
-                // ค้นหาจากหลายคอลัมน์
-                $query->where(function($q) use ($search) {
-                    $q->where('student_name', 'LIKE', "%{$search}%")
-                    ->orWhere('student_code', 'LIKE', "%{$search}%")
-                    ->orWhere('course_name', 'LIKE', "%{$search}%")
-                    ->orWhere('course_code', 'LIKE', "%{$search}%");
-                });
-            }
-
-            // สั่งดึงข้อมูล
-            $enrollments = $query->get();
-            $students = Student::all();
-            $courses = Course::all();
-            $departments = Department::all();
-
-            return view('enrollments.index', compact(
-                'enrollments', 
-                'students', 
-                'courses', 
-                'departments'
-            ));
-        } catch (Exception $e) {
-            // ถ้า Database มีปัญหา (เช่นลืมเปิด Laragon) จะดีดกลับหน้าเดิมพร้อมแจ้งเตือน
-            return back()->withErrors(['error' => 'การเชื่อมต่อฐานข้อมูลขัดข้อง: ' . $e->getMessage()]);
+        // ตรงนี้จะเป็นการทำให้ค้นหาจากหลายคอลัมน์ (ชื่อ หรือ รหัส หรือ วิชา)
+            $query->where(function($q) use ($search) {
+                $q->where('student_name', 'LIKE', "%{$search}%")
+                ->orWhere('student_code', 'LIKE', "%{$search}%")
+                ->orWhere('course_name', 'LIKE', "%{$search}%")
+                ->orWhere('course_code', 'LIKE', "%{$search}%");
+            });
         }
+
+        // สั่งดึงข้อมูล (ถ้าไม่มีการค้นหา ก็จะได้ข้อมูลทั้งหมดเหมือนเดิม)
+        $enrollments = $query->get();
+        
+        //บรรทัดด้านล่างที่คอมเม้นต์ไว้ เป็นของเดิมก่อนเพิ่มการค้นหา
+        //$enrollments = $query->get();
+        $students = Student::all();
+        $courses = Course::all();
+        $departments = Department::all(); // <--- 1. เพิ่มบรรทัดนี้
+
+        // ส่ง $departments ไปด้วย
+        return view('enrollments.index', 
+        compact('enrollments', 
+        'students', 
+        'courses', 
+        'departments'));
     }
 
     public function storeStudent(Request $request)
     {
-        try {
-            Student::create($request->validate([
-                'student_code' => 'required|unique:students',
-                'name' => 'required',
-                'department_id' => 'required'
-            ]));
+        // บันทึกลงตาราง students
+        Student::create($request->validate([
+            'student_code' => 'required|unique:students',
+            'name' => 'required',
+            'department_id' => 'required'
+        ]));
 
-            return back()->with('success', 'เพิ่มรายชื่อนักศึกษาใหม่เรียบร้อย');
-        } catch (Exception $e) {
-            return back()->withErrors(['error' => 'ไม่สามารถเพิ่มข้อมูลได้: ' . $e->getMessage()]);
-        }
+        return back()->with('success', 'เพิ่มรายชื่อนักศึกษาใหม่เรียบร้อย');
     }
 
     public function showStudent($id)
     {
-        // ใช้ findOrFail กัน Error กรณีไม่พบ ID
+        // 1. Master Data: ข้อมูลนักศึกษา + คณะ
         $student = Student::with('department')->findOrFail($id);
 
-        // ดึงจาก View
+        // 2. Details Data: ดึงจาก View ที่เราทำไว้ (Where ตาม student_id)
         $history = EnrollmentDetail::where('student_id', $id)->get();
 
-        // คำนวณหน่วยกิตรวม
+        // 3. คำนวณหน่วยกิตรวม (ลูกเล่นเพิ่มเติม)
         $totalCredits = $history->sum(function($row) {
-            // ตรวจสอบคอลัมน์ credits ใน View ถ้าไม่มีให้คืนค่า 0
-            return $row->credits ?? 0; 
+            // (ต้องดึง credit จาก Course จริง หรือจะ Join มาใน View ก็ได้)
+            // เพื่อความง่ายในตัวอย่างนี้ ผมขอข้ามการดึง Credit ไปก่อน หรือ
+            // ถ้าใน View ยังไม่มี credit ให้กลับไปแก้ View เพิ่ม column c.credits ก็ได้ครับ
+            return 0; 
         });
 
-        return view('enrollments.student_detail', compact('student', 'history', 'totalCredits'));
+        return view('enrollments.student_detail', compact('student', 'history'));
     }
 
     public function store(Request $request)
     {
-        try {
-            Enrollment::create($request->validate([
-                'student_id' => 'required',
-                'course_id' => 'required',
-                'grade' => 'nullable'
-            ]));
-            return back()->with('success', 'ลงทะเบียนเรียบร้อยแล้ว');
-        } catch (Exception $e) {
-            return back()->withErrors(['error' => 'ไม่สามารถลงทะเบียนได้: ' . $e->getMessage()]);
-        }
+        // บันทึกข้อมูลลง Table จริง
+        Enrollment::create($request->validate([
+            'student_id' => 'required',
+            'course_id' => 'required',
+            'grade' => 'nullable'
+        ]));
+        return back()->with('success', 'ลงทะเบียนเรียบร้อยแล้ว');
     }
 
     public function update(Request $request, $id)
     {
-        try {
-            // ใช้ findOrFail กันกรณีหา ID ไม่เจอตอนอัปเดต
-            $enrollment = Enrollment::findOrFail($id);
-            $enrollment->update($request->validate([
-                'grade' => 'nullable|string|max:2'
-            ]));
-            return back()->with('success', 'อัปเดตเกรดเรียบร้อย');
-        } catch (Exception $e) {
-            return back()->withErrors(['error' => 'อัปเดตไม่สำเร็จ: ' . $e->getMessage()]);
-        }
+        // อัปเดตเกรด
+        $enrollment = Enrollment::find($id);
+        $enrollment->update(['grade' => $request->grade]);
+        return back()->with('success', 'อัปเดตเกรดเรียบร้อย');
     }
 
     public function destroy($id)
     {
-        try {
-            // เปลี่ยนเป็น findOrFail เพื่อความปลอดภัย
-            $enrollment = Enrollment::findOrFail($id);
-            $enrollment->delete();
-            return back()->with('success', 'ถอนรายวิชาเรียบร้อย');
-        } catch (Exception $e) {
-            return back()->withErrors(['error' => 'ไม่สามารถลบข้อมูลได้: ' . $e->getMessage()]);
-        }
+        // ลบข้อมูล
+        Enrollment::destroy($id);
+        return back()->with('success', 'ถอนรายวิชาเรียบร้อย');
     }
 
+    // เพิ่มฟังก์ชันนี้ต่อท้ายสุดใน Controller
     public function report(Request $request)
     {
-        try {
-            $courses = Course::all();
-            $results = collect(); 
-            $selectedCourse = null;
+        // 1. ดึงรายชื่อวิชาทั้งหมด เพื่อเอาไปใส่ใน Dropdown ตัวเลือก
+        $courses = Course::all();
 
-            if ($request->has('course_id')) {
-                $courseId = $request->course_id;
-                
-                $results = EnrollmentDetail::where('course_id', $courseId)
-                            ->orderBy('student_code')
-                            ->get();
+        // 2. ตัวแปรเก็บผลลัพธ์ (เริ่มต้นเป็นค่าว่าง)
+        $results = collect(); 
+        $selectedCourse = null;
 
-                $selectedCourse = Course::find($courseId);
-            }
+        // 3. ถ้ามีการเลือกวิชามา (กดปุ่มค้นหา)
+        if ($request->has('course_id')) {
+            $courseId = $request->course_id;
+            
+            // ดึงข้อมูลจาก View โดย Filter ตาม Course ID
+            $results = EnrollmentDetail::where('course_id', $courseId)
+                        ->orderBy('student_code') // เรียงตามรหัสนักศึกษา
+                        ->get();
 
-            return view('enrollments.report', compact('courses', 'results', 'selectedCourse'));
-        } catch (Exception $e) {
-            return back()->withErrors(['error' => 'เกิดข้อผิดพลาดในการดึงรายงาน: ' . $e->getMessage()]);
+            // ดึงข้อมูลวิชาที่เลือกมาโชว์หัวกระดาษ
+            $selectedCourse = Course::find($courseId);
         }
+
+        return view('enrollments.report', 
+        compact('courses', 'results', 'selectedCourse'));
     }
 }
